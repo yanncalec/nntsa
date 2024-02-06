@@ -56,11 +56,11 @@ class VARX(ABC):
         Parameters
         ----------
         data_in
-            input dataframe. The first axis is the time index
+            input dataframe. The first axis is the time index.
         data_out
             output dataframe. It must share the same time index as `data_in`.
         order
-            order of the VARX model, a tuple `(x, ar)`.
+            order of the VARX model, a tuple `(x, ar)` specifying the order of exogeneous and auto-regressive inputs.
         train_idx
             index of data used for training, a list, by default use all data.
         test_idx
@@ -197,7 +197,7 @@ class VARX(ABC):
         # First fit the model.
         self._fit(**kwargs)
         # Make prediction on the whole dataset of initialization.
-        self._prediction, _ = self.predict()  # the return R2 score is dropped.
+        self._prediction, _ = self.predict()  # the returned R2 score is dropped.
         _ = self.score(self._prediction)  # compute and save the R2 scores.
 
         # Construct the regression matrix in the linear case
@@ -241,16 +241,16 @@ class VARX(ABC):
         Parameters
         ----------
         prd
-            predictions, recompute from data if not given.
+            predictions. If not given it will be recomputed from data.
 
         Notes
         -----
-        This method should be called only after `fit()`. It modifies the following variables:
+        This method should be called only after `fit()`. It modifies the following inner variables:
         - `_r2score`: R2 of whole prediction
         - `_r2score_fit`: R2 of fit
         - `_r2score_val`: R2 of validation
         """
-        # compute r2 score of whole prediction
+        # compute r2 score of the whole prediction
         if prd is None:
             prd, _ = self.predict()
         else:
@@ -357,25 +357,32 @@ class VARX(ABC):
 
         Note
         ----
-        - R2 score is computed by truncating nans in both the prediction and the ground truth. These may still contain invalid values (due to data stacking) hence should
-        - In-sample prediction is activated iff data_in and data_out are both given or both not given (use data of initialization in this case). Out-sample prediction is activated otherwise.
+        - R2 score is computed by truncating nans in both the prediction and the ground truth.
+        - In-sample prediction is activated iff `data_in` and `data_out` are both given or both not given (use data of initialization in this case). Out-sample prediction is activated otherwise.
         - To activate out-of-sample prediction using data of initialization, set `data_in` to None and `data_out` to any value but None, e.g. use `predict(None, [])`. This way `data_out` will be ignored.
         - Missing values in `data_in` and `data_out` result in invalid local predictions. Therefore it is not necessary to fill nans beforehand.
         """
-        if (data_in is None) ^ (data_out is None):  # T^T=F^F=F, T^F=F^T=T
-            # data_out is ignored
+        # mode of prediction
+        # (data_in is None) ^ (data_out is None) has 4 cases T^T=F^F=F, T^F=F^T=T
+        # case T^T: insample prediction with default values
+        # case F^F: insample prediction with ground truth
+        # case T^F: outofsample prediction with default values, data_out being ignored
+        # case F^T: outofsample prediction without ground truth
+        outofsample = (data_in is None) ^ (data_out is None)
+
+        if outofsample:
             prd, exg = self.predict_outofsample(data_in)
         else:
             prd, exg = self.predict_insample(data_in, data_out)
 
         if not fillna:
-            # `exg` may contain nans (due to e.g. data stacking of `data_in` and `data_out`) which were filled before prediction, so that `prd` does not contain nans. For accurate R2 score, these nans need to be restored and their positions will be removed in the computation.
+            # `exg` may contain nans (due to e.g. data stacking of `data_in` and `data_out`). They are filled before making prediction so that `prd` does not contain nans. For accurate R2 score, these nans need to be restored and their positions will be removed in the computation.
             # This is similar to the treatement applied on `self._Xtrn, self._Ytrn`.
             na_idx = exg.isna().prod(axis=1)==1
             prd.loc[na_idx] = np.nan
 
         # compute R2 score of prediction with truncation of missing values
-        if (data_in is None) ^ (data_out is None):  # T^T=F^F=F, T^F=F^T=T
+        if outofsample:
             # valid only if data_in is not given, since otherwise there is no ground truth to compare to.
             r2s = stats.r2score(*tsa.drop_nan_rows(self.data_out, prd), **kwargs) if data_in is None else None
         else:
@@ -400,7 +407,7 @@ class VARX_sklearn(VARX):
         # pipeline
         if isinstance(basemodel, pipeline.Pipeline):
             if len(basemodel) > 3:
-                raise Exception("Unsupported pipeline: only the model 'StandarScaler-PolynomialFeature-Estimator' can be used.")
+                raise Exception("Unsupported pipeline: only the compound model 'StandarScaler-PolynomialFeature-Estimator' can be used.")
 
             if len(basemodel) == 2:
                 assert isinstance(basemodel.steps[0][1], sklearn.preprocessing._data.StandardScaler) | isinstance(basemodel.steps[0][1], sklearn.preprocessing._polynomial.PolynomialFeatures), "First step in the pipeline must be a StandardScaler or PolynomialFeature."
